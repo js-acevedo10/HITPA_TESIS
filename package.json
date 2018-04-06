@@ -1,0 +1,23 @@
+{
+  "name": "hitpa",
+  "version": "0.0.1",
+  "description": "Command-line tool for Android testing application, hitpa.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "hitpa",
+    "android",
+    "testing"
+  ],
+  "author": "Juan Santiago Acevedo & Daniel Soto Rey",
+  "license": "Apache-2.0",
+  "bin": {
+    "hitpa": "./index.js"
+  },
+  "dependencies": {
+    "co": "^4.6.0",
+    "co-prompt": "^1.0.0"
+  }
+}
