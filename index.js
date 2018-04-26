@@ -6,12 +6,39 @@ var cmd = require('node-cmd');
 const { exec } = require('child_process');
 var apkDirectory = '';
 var maxMutants = 0;
+var results = {
+    goodMonkeys : 0,
+    badMonkeys : 0,
+    monkeyResults: [],
+    mutantDescriptions : []
+}
+
+function Stack() {
+    this.data = [];
+    this.top = 0;
+}
+
+Stack.prototype.pop = function () {
+    return this.data[--this.top];
+};
+
+Stack.prototype.peek = function () {
+    return this.data[this.top - 1];
+};
+
+Stack.prototype.length = function () {
+    return this.top;
+};
+
+Stack.prototype.clear = function () {
+    this.top = 0;
+};
 
 function installMDroid() {
     console.log('Installing mDroid+ and its dependencies...');
     exec('cd ' + mdroidFolder + ' mvn clean && mvn package', (err, stdout, stderr) => {
-        console.log(stdout);
-        console.log(stderr);
+        // console.log(stdout);
+        // console.log(stderr);
         if(err) {
             console.log('Error installing mDroid+ and its dependencies, please make sure you have Maven installed.');
         } else {
@@ -33,8 +60,15 @@ function runMDroid() {
             console.log(data);
             var x = data.split("Total Locations: ")[1];
             var lines = x.split('\n');
-            console.log('number of mutants:', lines[0]);
+            console.log('Number of mutants raised:', lines[0]);
             maxMutants = lines[0];
+            if (numOfMutants > maxMutants) numOfMutants = maxMutants;
+            for (var i = 1; i <= numOfMutants; i++) {
+                let string = `Mutant: ${i} - `;
+                let mutant = x.split(string)[1];
+                let mutantDesc = mutant.split('\n')[0];
+                results.mutantDescriptions.push(mutantDesc);
+            }
             backupOriginalProject();
         } else {
             console.log('error', err);
@@ -43,7 +77,7 @@ function runMDroid() {
 }
 
 function backupOriginalProject() {
-    console.log('Creating original proyect Backup...');
+    console.log('\nCreating original proyect Backup...\n');
     cmd.get(`
         cd ${mdroidFolder}
         rm -rf backup/original/
@@ -52,6 +86,20 @@ function backupOriginalProject() {
     `, function(err, data, stderr) {
         if (!err) {
             createMutants();
+        } else {
+            console.log('error', err);
+        }
+    })
+}
+
+function restoreOriginalContent() {
+    console.log('\nRestoring original proyect Backup...');
+    cmd.get(`
+        cd ${mdroidFolder}
+        mv backup/original/main/ ${androidStudioPath}app/src/
+    `, function(err, data, stderr) {
+        if (!err) {
+            console.log('Original content restored...\n');
         } else {
             console.log('error', err);
         }
@@ -69,54 +117,86 @@ function createMutants() {
     `, function(err, data, stderr) {
         if (!err) {
             apkDirectory = data;
-            if (numOfMutants > maxMutants) numOfMutants = maxMutants;
-            // for (var i = 0; i < numOfMutants; i++) {
-                var i = 1;
+            for (var i = 0; i < numOfMutants; i++) {
+                let x = i;
+                // var i = 1;
                 randomMutant = Math.floor(Math.random() * maxMutants) + 1;
                 cmd.get(`
-                    cp -a ${mdroidFolder}/${mutantsPath}/${appName}-mutant${randomMutant}/ ${androidStudioPath}app/src/main
                     cd ${androidStudioPath}
+                    cd ../
+                    rm -rf ${x}
+                    mkdir ${x}
+                    cp -a ${androidStudioPath} ${x}
+                    cp -a ${mdroidFolder}/${mutantsPath}/${appName}-mutant${randomMutant}/ ${x}/app/src/main
+                    cd ${x}
                     chmod +x gradlew
                     ./gradlew assembleDebug
                 `, function(err, data, stderr) {
                     if (!err) {
-                        console.log(data);
+                        // console.log(data);
                         cmd.get(`
-                            cd ${androidStudioPath}/app/build/outputs/apk/debug
+                            cd ${androidStudioPath}
+                            cd ../
+                            cd ./${x}/app/build/outputs/apk/debug
                             mv app-debug.apk ${mdroidFolder}/output/apks/
                             cd ${mdroidFolder}/output/apks/
-                            mv "app-debug.apk" "app-mutant-${i}.apk"
+                            mv "app-debug.apk" "app-mutant-${x}.apk"
+                            cd ${androidStudioPath}
+                            cd ../
+                            rm -rf ${x}
                         `, function(err, data, stderr) {
                             if(!err) {
-                                runMonkeys()
+                                if (x == numOfMutants - 1) {
+                                    runMonkeys(0)
+                                    restoreOriginalContent()
+                                }
                             } else {
                                 console.log('error', err);
+                                restoreOriginalContent()
                             }
                         });
                     } else {
                         console.log('error', err);
+                        restoreOriginalContent()
                     }
                 })
-            // }
+            }
         } else {
             console.log('error', err);
+            restoreOriginalContent()
         }
     })
 }
 
-function runMonkeys() {
-    console.log("Running monkeys...");
-    cmd.get(`
-        cd ${mdroidFolder}/output/apks/
-        adb install -r app-mutant-1.apk
-        adb shell monkey -p ${packageName} -s 1 -v -v 1000
-    `, function(err, data, stderr) {
-        if(!err) {
-            console.log(data);
-        } else {
-            console.log('error', err);
-        }
-    });
+function runMonkeys(x) {
+    console.log(`\n\nRunning monkey ${x}`);
+        cmd.get(`
+            cd ${mdroidFolder}/output/apks/
+            adb install -r app-mutant-${x}.apk
+            adb shell monkey -p ${packageName} -s ${x} -v -v 100
+        `, function(err, data, stderr) {
+            if(!err) {
+                // console.log('\nMico bueno !!\n', data);
+                results.goodMonkeys++
+                results.monkeyResults[x] = 'PASSED';
+            } else {
+                console.log('\nMico malo !!\n', err);
+                results.badMonkeys++
+                results.monkeyResults[x] = 'FAILED';
+            }
+            if (x < numOfMutants - 1) {
+                runMonkeys(x + 1);
+            } else {
+                console.log('=============================\n');
+                console.log('Resultados:')
+                console.log('Monkey tests passed: ' + results.goodMonkeys);
+                console.log('Monkey tests failed: ' + results.badMonkeys);
+                for (var i = 0; i < numOfMutants; i++) {
+                    console.log(`Mutant ${i+1}: ${results.mutantDescriptions[i]}\t(${results.monkeyResults[i]})`)
+                }
+                console.log('\n=============================');
+            }
+        });
 }
 
 program
