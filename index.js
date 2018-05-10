@@ -37,8 +37,6 @@ Stack.prototype.clear = function () {
 function installMDroid() {
     console.log('Installing mDroid+ and its dependencies...');
     exec('cd ' + mdroidFolder + ' mvn clean && mvn package', (err, stdout, stderr) => {
-        // console.log(stdout);
-        // console.log(stderr);
         if(err) {
             console.log('Error installing mDroid+ and its dependencies, please make sure you have Maven installed.');
         } else {
@@ -119,7 +117,6 @@ function createMutants() {
             apkDirectory = data;
             for (var i = 0; i < numOfMutants; i++) {
                 let x = i;
-                // var i = 1;
                 randomMutant = Math.floor(Math.random() * maxMutants) + 1;
                 cmd.get(`
                     cd ${androidStudioPath}
@@ -130,6 +127,7 @@ function createMutants() {
                     cp -a ${mdroidFolder}/${mutantsPath}/${appName}-mutant${randomMutant}/ ${x}/app/src/main
                     cd ${x}
                     chmod +x gradlew
+                    ./gradlew test
                     ./gradlew assembleDebug
                 `, function(err, data, stderr) {
                     if (!err) {
@@ -148,22 +146,22 @@ function createMutants() {
                             if(!err) {
                                 if (x == numOfMutants - 1) {
                                     runMonkeys(0)
-                                    restoreOriginalContent()
+                                    restoreOriginalContent();
                                 }
                             } else {
                                 console.log('error', err);
-                                restoreOriginalContent()
+                                restoreOriginalContent();
                             }
                         });
                     } else {
                         console.log('error', err);
-                        restoreOriginalContent()
+                        restoreOriginalContent();
                     }
                 })
             }
         } else {
             console.log('error', err);
-            restoreOriginalContent()
+            restoreOriginalContent();
         }
     })
 }
@@ -172,31 +170,46 @@ function runMonkeys(x) {
     console.log(`\n\nRunning monkey ${x}`);
         cmd.get(`
             cd ${mdroidFolder}/output/apks/
+            emulator @Nexus5 -gpu on
             adb install -r app-mutant-${x}.apk
-            adb shell monkey -p ${packageName} -s ${x} -v -v 100
+            adb shell monkey -p ${packageName} -s ${x}919 -v -v 100
         `, function(err, data, stderr) {
             if(!err) {
-                // console.log('\nMico bueno !!\n', data);
                 results.goodMonkeys++
                 results.monkeyResults[x] = 'PASSED';
             } else {
                 console.log('\nMico malo !!\n', err);
-                results.badMonkeys++
-                results.monkeyResults[x] = 'FAILED';
+                results.badMonkeys++;
+                results.monkeyResults[x] = `FAILED`;
             }
             if (x < numOfMutants - 1) {
+                runFirebaseTestLab(x);
                 runMonkeys(x + 1);
             } else {
                 console.log('=============================\n');
-                console.log('Resultados:')
+                console.log('Resultados:');
                 console.log('Monkey tests passed: ' + results.goodMonkeys);
                 console.log('Monkey tests failed: ' + results.badMonkeys);
                 for (var i = 0; i < numOfMutants; i++) {
-                    console.log(`Mutant ${i+1}: ${results.mutantDescriptions[i]}\t(${results.monkeyResults[i]})`)
+                    console.log(`Mutant ${i+1}: ${results.mutantDescriptions[i]}\t(${results.monkeyResults[i]})`);
                 }
                 console.log('\n=============================');
             }
         });
+}
+
+function runFirebaseTestLab(x) {
+    console.log('\n\nRunning Firebase Test Lab');
+    cmd.get(`
+        cd ${mdroidFolder}/output/apks/
+        gcloud firebase test android run --app app-mutant-${x}.apk --device model=Nexus6,version=21,locale=en,orientation=portrait --timeout 90s
+    `, function (err, data, stderr) {
+        if(!err) {
+            console.log(data);
+        } else {
+            console.log(`Error\n\n: ${stderr}`);
+        }
+    });
 }
 
 program
