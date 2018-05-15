@@ -290,10 +290,11 @@ function writeTestData(testResult) {
     testResult.firebaseTestDuration = firebaseTestDuration;
     testResult.numOfMutants = numOfMutants;
     var ref = firebase.database().ref('tests/').push();
+    
     ref.set(testResult);
-    console.log('\n=============================');
-    console.log(`Visita https://hitpa.tresastronautas.com para ver el resultado de tu prueba al detalle (ID = ${ref})`);
-    console.log('=============================');
+    console.log(`\n=============================
+    Visita https://hitpa.tresastronautas.com para ver el resultado de tu prueba al detalle (ID = ${ref.key})
+    =============================`);
 }
 
 program
