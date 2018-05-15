@@ -18,6 +18,8 @@
   },
   "dependencies": {
     "co": "^4.6.0",
-    "co-prompt": "^1.0.0"
+    "co-prompt": "^1.0.0",
+    "firebase": "^5.0.2",
+    "properties-reader": "0.0.16"
   }
 }
