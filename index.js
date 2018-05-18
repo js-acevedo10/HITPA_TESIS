@@ -11,13 +11,20 @@ var apkDirectory = '';
 var maxMutants = 0;
 var firebaseCounter = 0;
 var initTime = Date();
+var firebaseTestKey = '';
+let descriptions = [];
 var results = {
-    goodMonkeys : 0,
-    badMonkeys : 0,
     monkeyResults: [],
+    monkeyTraces: [],
     mutantDescriptions : [],
     unitResults : [],
-    firebaseTestResults : []
+    unitTraces: [],
+    firebaseTestResults : [],
+    firebaseTraces: [],
+    monkeySeeds: [],
+    compilationResults: [],
+    compilationTraces: [],
+    pending : false,
 }
 
 function Stack() {
@@ -55,34 +62,57 @@ function installMDroid() {
 function runMDroid() {
     console.log('Running mDroid+...');
     console.log(`java -jar target/MDroidPlus-1.0.0.jar libs4last/ ${androidStudioPath}app/src/main ${appName} ${mutantsPath} . true`);
-    cmd.get(`
+    const mdroidRef = cmd.get(`
         cd ${mdroidFolder}
         rm -rf ${mutantsPath}
         mkdir -p ${mutantsPath}
         java -jar target/MDroidPlus-1.0.0.jar libs4last/ ${androidStudioPath}app/src/main ${appName} ${mutantsPath} . true
-    `, function(err, data, stderr) {
-        if (!err) {
-            console.log(data);
-            var x = data.split("Total Locations: ")[1];
+    `);
+    let data_line = '';
+    let data_error_line = '';
+    let error_line = '';
+
+    mdroidRef.stderr.on('data', function(data) {
+        if (error_line != data) {
+            error_line += data;
+        }
+    });
+
+    mdroidRef.stderr.on('end', function() {
+        console.log(error_line);
+    });
+    
+    mdroidRef.stdout.on('data', function(data) {
+        data_line += data;
+    });
+
+    mdroidRef.stdout.on('error', function(error) {
+        data_error_line += error;
+    });
+
+    mdroidRef.stdout.on('end', function() {
+        console.log(data_line);
+        if (!error_line.includes('(No such file or directory)')) {
+            var x = data_line.split("Total Locations: ")[1];
             var lines = x.split('\n');
-            console.log('Number of mutants raised:', lines[0]);
             maxMutants = lines[0];
             if (numOfMutants > maxMutants) numOfMutants = maxMutants;
-            for (var i = 1; i <= numOfMutants; i++) {
+            for (var i = 1; i <= maxMutants; i++) {
                 let string = `Mutant: ${i} - `;
                 let mutant = x.split(string)[1];
                 let mutantDesc = mutant.split('\n')[0];
-                results.mutantDescriptions.push(mutantDesc);
+                descriptions.push(mutantDesc);
             }
+            console.log(descriptions);
             backupOriginalProject();
         } else {
-            console.log('error', err);
+            console.log(error_line);
         }
     });
 }
 
 function backupOriginalProject() {
-    console.log('\nCreating original proyect Backup...\n');
+    console.log('Creando copia de seguridad del proyecto original.')
     cmd.get(`
         cd ${mdroidFolder}
         rm -rf backup/original/
@@ -90,7 +120,7 @@ function backupOriginalProject() {
         mv ${androidStudioPath}app/src/main backup/original/
     `, function(err, data, stderr) {
         if (!err) {
-            createMutants();
+            runUnitTest();
         } else {
             console.log('error', err);
         }
@@ -98,21 +128,20 @@ function backupOriginalProject() {
 }
 
 function restoreOriginalContent() {
-    console.log('\nRestoring original proyect Backup...');
     cmd.get(`
         cd ${mdroidFolder}
         mv backup/original/main/ ${androidStudioPath}app/src/
     `, function(err, data, stderr) {
         if (!err) {
-            console.log('Original content restored...\n');
+            console.log('Copia de seguridad del proyecto original restaurada.\n');
         } else {
             console.log('error', err);
         }
     })
 }
 
-function createMutants() {
-    console.log('Creando .apks de mutantes...')
+function runUnitTest() {
+    console.log('Corriendo pruebas de unidad sobre los mutantes.');
     cmd.get(`
         cd ${mdroidFolder}
         rm -rf output/apks
@@ -124,8 +153,14 @@ function createMutants() {
             apkDirectory = data;
             for (var i = 0; i < numOfMutants; i++) {
                 let x = i;
+                let randomTries = 0;
                 randomMutant = Math.floor(Math.random() * maxMutants) + 1;
-                cmd.get(`
+                while (results.mutantDescriptions.includes(descriptions[randomMutant + 1]) && randomTries < maxMutants - 1) {
+                    randomTries++;
+                    randomMutant = Math.floor(Math.random() * maxMutants) + 1;
+                }
+                results.mutantDescriptions[i] = descriptions[randomMutant - 1];
+                let uTestRef = cmd.get(`
                     cd ${androidStudioPath}
                     cd ../
                     rm -rf ${x}
@@ -134,53 +169,38 @@ function createMutants() {
                     cp -a ${mdroidFolder}/${mutantsPath}/${appName}-mutant${randomMutant}/ ${x}/app/src/main
                     cd ${x}
                     chmod +x gradlew
-                    ./gradlew test
-                `, function(err1, data1, stderr1) {
-                    if(err1) {
-                        console.log('errooooooooor', err1);
-                        results.unitResults[x] = false
-                        // restoreOriginalContent();
+                    ./gradlew test --stacktrace
+                `);
+                let uTestRefData = '';
+                let uTestRefDataError = '';
+                let uTestRefError = '';
+
+                uTestRef.stderr.on('data', function (data) {
+                    uTestRefError += data;
+                });
+
+                uTestRef.stdout.on('data', function (data) {
+                    uTestRefData += data;
+                    console.log(data);
+                });
+
+                uTestRef.stdout.on('error', function (error) {
+                    uTestRefDataError += error;
+                });
+
+                uTestRef.stdout.on('end', function () {
+                    if (uTestRefData.includes('BUILD SUCCESSFUL')) {
+                        console.log(`Pruebas de unidad sobre el mutante ${x} exitosas.`);
+                        results.unitResults[x] = true;
+                        results.unitTraces[x] = uTestRefData;
                     } else {
-                        console.log(data1);
-                        results.unitResults[x] = true
+                        console.log(`Pruebas de unidad sobre el mutante ${x} fallidas.`);
+                        results.unitResults[x] = false;
+                        // results.unitTraces[x] = `${packageName}${uTestRefData.split(':app:testDebugUnitTest')[1]}`;
+                        results.unitTraces[x] = uTestRefData;
                     }
-                    cmd.get(`
-                        cd ${androidStudioPath}
-                        cd ../
-                        cd ${x}
-                        ./gradlew assembleDebug
-                    `, function(err2, data2, stderr2) {
-                        if (!err2) {
-                            // console.log(data);
-                            // rm -rf ${x}
-                            cmd.get(`
-                                cd ${androidStudioPath}
-                                cd ../
-                                cd ./${x}/app/build/outputs/apk/debug
-                                mv app-debug.apk ${mdroidFolder}/output/apks/
-                                cd ${mdroidFolder}/output/apks/
-                                mv "app-debug.apk" "app-mutant-${x}.apk"
-                                cd ${androidStudioPath}
-                                cd ../                                    
-                            `, function(err3, data3, stderr3) {
-                                if(!err3) {
-                                    if (x == numOfMutants - 1) {
-                                        setTimeout(function () {
-                                            runMonkeys(0);
-                                        }, 5000);
-                                        restoreOriginalContent();
-                                    }
-                                } else {
-                                    console.log('error', err3);
-                                    restoreOriginalContent();
-                                }
-                            });
-                        } else {
-                            console.log('error', err2);
-                            restoreOriginalContent();
-                        }
-                    })
-                })
+                    buildMutantApks(x);
+                });
             }
         } else {
             console.log('error', err);
@@ -189,36 +209,132 @@ function createMutants() {
     })
 }
 
+function buildMutantApks(x) {
+    console.log(`Iniciando compilación del mutante ${x}.`);
+    let buildRef = cmd.get(`
+        cd ${androidStudioPath}
+        cd ../
+        cd ${x}
+        ./gradlew assembleDebug --stacktrace
+    `);
+    let buildRefData = '';
+    let buildRefDataError = '';
+    let buildRefError = '';
+
+    buildRef.stderr.on('data', function (data) {
+        buildRefError += data;
+    });
+
+    buildRef.stderr.on('complete', function () {
+        console.log('Error', buildRefError);
+    });
+
+    buildRef.stdout.on('data', function (data) {
+        buildRefData += data;
+    });
+
+    buildRef.stdout.on('error', function (error) {
+        buildRefDataError += error;
+    });
+
+    buildRef.stdout.on('end', function () {
+        if (buildRefData.includes('BUILD SUCCESSFUL')) {
+            console.log(`Compilación del mutante ${x} exitosa.`);
+            results.compilationResults[x] = true;
+            results.compilationTraces[x] = buildRefData;
+            moveApk(x);
+        } else {
+            console.log(`Compilación del mutante ${x} fallida.`);
+            results.compilationResults[x] = false;
+            results.compilationTraces[x] = buildRefData;
+        }
+    });
+}
+
+function moveApk(x) {
+    cmd.get(`
+        cd ${androidStudioPath}
+        cd ../
+        cd ./${x}/app/build/outputs/apk/debug
+        mv app-debug.apk ${mdroidFolder}/output/apks/
+        cd ${mdroidFolder}/output/apks/
+        mv "app-debug.apk" "app-mutant-${x}.apk"
+        cd ${androidStudioPath}
+        cd ../                                    
+    `, function(err, data, stderr) {
+    if(!err) {
+        if (x == numOfMutants - 1) {
+            startEmulator();
+            setTimeout(function () {
+                runMonkeys(0);
+            }, 5000);
+                restoreOriginalContent();
+            }
+        } else {
+            console.log('error', err);
+            restoreOriginalContent();
+        }
+    });
+}
+
 function startEmulator() {
     cmd.run('cd ${ANDROID_HOME}/tools && ./emulator @Nexus5');
 }
 
 function runMonkeys(x) {
-    console.log(`\n\nRunning monkey ${x}`);
-        cmd.get(`
-            cd ${mdroidFolder}/output/apks/
-            adb install -r app-mutant-${x}.apk
-            adb shell monkey -p ${packageName} -s ${x}919 -v -v ${numOfMonkeyEvents}
-        `, function(err, data, stderr) {
-            if(!err) {
-                results.goodMonkeys++
-                results.monkeyResults[x] = true;
+    console.log(`\nCorriendo pruebas Monkey sobre el mutante ${x}`);
+    let monkeyRef = cmd.get(`
+        cd ${mdroidFolder}/output/apks/
+        adb install -r app-mutant-${x}.apk
+        adb shell monkey -p ${packageName} -s ${x}919 -v ${numOfMonkeyEvents}
+    `);
+    let monkeyRefData = '';
+    let monkeyRefDataError = '';
+    let monkeyRefError = '';
+
+    monkeyRef.stderr.on('data', function (data) {
+        monkeyRefError += data;
+    });
+
+    monkeyRef.stderr.on('end', function () {
+        console.log('Error', monkeyRefData);
+    });
+
+    monkeyRef.stdout.on('data', function (data) {
+        monkeyRefData += data;
+    });
+
+    monkeyRef.stdout.on('error', function (error) {
+        monkeyRefDataError += error;
+    });
+
+    monkeyRef.stdout.on('close', function () {
+        // console.log('Data', monkeyRefData);
+        // console.log('DataError', monkeyRefDataError);
+        // console.log('Error', monkeyRefError);
+        if (monkeyRefData.includes('aborted')) {
+            console.log(`Mutante ${x} detectado por pruebas monkey.`);
+            results.monkeyResults[x] = false;
+            results.monkeyTraces[x] = monkeyRefData;
+        } else {
+            console.log(`Mutante ${x} no detectado por pruebas monkey.`);
+            results.monkeyResults[x] = true;
+            results.monkeyTraces[x] = monkeyRefData;
+        }
+        results.monkeySeeds[x] = `${x}919`;
+        if (firebaseTestLab) {
+            runFirebaseTestLab(x);
+        }
+        if (x < numOfMutants - 1) {
+            runMonkeys(x + 1);
+        } else {
+            if (!firebaseTestLab) {
+                generateResults();
             } else {
-                console.log('\nMico malo !!\n', err);
-                results.badMonkeys++;
-                results.monkeyResults[x] = false;
+                generateTempResults();
             }
-            if (firebaseTestLab) {
-                runFirebaseTestLab(x);
-            }
-            if (x < numOfMutants - 1) {
-                runMonkeys(x + 1);
-            } else {
-                if (!firebaseTestLab) {
-                    generateResults();
-                }
-            }
-        });
+        }
+    });
 }
 
 function runFirebaseTestLab(x) {
@@ -230,15 +346,27 @@ function runFirebaseTestLab(x) {
         firebaseCounter++;
         if(!err) {
             console.log(data);
-            results.firebaseTestResults[i] = data.includes('Passed');
+            results.firebaseTestResults[x] = data.includes('Passed');
+            results.firebaseTraces[x] = false;
         } else {
             console.log(`Error\n\n: ${stderr}`);
             results.firebaseTestResults[x] = false;
+            results.firebaseTraces[x] = stderr;
         }
         if(firebaseCounter == numOfMutants) {
-            generateResults();
+            completeResults()
         }
     });
+}
+
+function completeResults() {
+    results.pending = false;
+    writeTestData(results);
+}
+
+function generateTempResults() {
+    results.pending = true;
+    initFirebase();
 }
 
 function generateResults() {
@@ -289,11 +417,18 @@ function writeTestData(testResult) {
     testResult.firebaseTestLab = firebaseTestLab;
     testResult.firebaseTestDuration = firebaseTestDuration;
     testResult.numOfMutants = numOfMutants;
-    var ref = firebase.database().ref('tests/').push();
-    
-    ref.set(testResult);
+
+    if (firebaseTestKey == null || firebaseTestKey == '') {
+        let ref = firebase.database().ref('tests/').push();
+        ref.set(testResult);
+        firebaseTestKey = ref.key;
+    } else {
+        let ref = firebase.database().ref(`tests/${firebaseTestKey}/`);
+        testResult.finishTimestamp = Date();
+        ref.set(testResult);
+    }
     console.log(`\n=============================
-    Visita https://hitpa.tresastronautas.com para ver el resultado de tu prueba al detalle (ID = ${ref.key})
+    Visita https://hitpa.tresastronautas.com/test/${firebaseTestKey} para conocer el resultado de tu prueba.
     =============================`);
 }
 
